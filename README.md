@@ -1,18 +1,18 @@
 <div align="center">
+
 # CPA-Codex-Manager
 ---
-![CPA-Codex-Manager Icon](https://github.com/user-attachments/assets/e4a5471d-8b0b-4a28-89ee-c3aba4d36a0b)
-> 专为 OpenAI 账号池设计的高性能管理面板
->
-> 集成全自动批量注册、CLIProxyAPI 监控与智能维护
-</div>
----
+![icon png](https://github.com/user-attachments/assets/4106fb61-5359-4d05-b666-9aa3e6e7a0f3)
 
 一款专为 OpenAI 账号池设计的高性能管理面板，集成全自动批量注册、CLIProxyAPI 平台账号池实时监控与智能维护系统。
 本项目核心基于 [cnlimiter/codex-manager](https://github.com/cnlimiter/codex-manager) 以及 [DestinyCycloid/codex-console](https://github.com/DestinyCycloid/codex-console) 开发。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
+
+</div>
+
+---
 
 ## 核心特性
 
