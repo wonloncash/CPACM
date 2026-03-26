@@ -6,6 +6,7 @@ import uvicorn
 import logging
 import sys
 from pathlib import Path
+import platform
 
 # 添加项目根目录到 Python 路径
 # PyInstaller 打包后 __file__ 在临时解压目录，需要用 sys.executable 所在目录作为数据目录
@@ -22,6 +23,24 @@ sys.path.insert(0, str(_src_root))
 from src.core.utils import setup_logging
 from src.database.init_db import initialize_database
 from src.config.settings import get_settings
+
+
+def _get_runtime_dirs() -> tuple[Path, Path]:
+    """返回运行时数据目录和日志目录。
+
+    - 开发模式：项目根目录下的 data/、logs/
+    - 打包模式：
+      - macOS：~/Library/Application Support/CPA-Codex-Manager/
+      - 其它平台：可执行文件同级目录
+    """
+    if not getattr(sys, 'frozen', False):
+        return project_root / "data", project_root / "logs"
+
+    if platform.system() == "Darwin":
+        app_support = Path.home() / "Library" / "Application Support" / "CPA-Codex-Manager"
+        return app_support / "data", app_support / "logs"
+
+    return project_root / "data", project_root / "logs"
 
 
 def _load_dotenv():
@@ -46,11 +65,10 @@ def setup_application():
     # 加载 .env 文件（优先级低于已有环境变量）
     _load_dotenv()
 
-    # 确保数据目录和日志目录在可执行文件所在目录（打包后也适用）
-    data_dir = project_root / "data"
-    logs_dir = project_root / "logs"
-    data_dir.mkdir(exist_ok=True)
-    logs_dir.mkdir(exist_ok=True)
+    # 确保数据目录和日志目录存在
+    data_dir, logs_dir = _get_runtime_dirs()
+    data_dir.mkdir(parents=True, exist_ok=True)
+    logs_dir.mkdir(parents=True, exist_ok=True)
 
     # 将数据目录路径注入环境变量，供数据库配置使用
     os.environ.setdefault("APP_DATA_DIR", str(data_dir))
@@ -99,18 +117,7 @@ def start_webui():
     from src.web.app import app
 
     # 配置 uvicorn
-    uvicorn_config = {
-        "app": "src.web.app:app",
-        "host": settings.webui_host,
-        "port": settings.webui_port,
-        "reload": settings.debug,
-        "log_level": "info" if settings.debug else "warning",
-        "access_log": settings.debug,
-        "ws": "websockets",
-        # 防止注册线程繁忙时前端请求超时断开
-        "timeout_keep_alive": 120,   # Keep-Alive 连接保持 120 秒
-        "timeout_graceful_shutdown": 30,
-    }
+    uvicorn_config = create_uvicorn_config(settings)
 
     logger = logging.getLogger(__name__)
     
@@ -154,6 +161,24 @@ def start_webui():
 
     # 启动服务器
     uvicorn.run(**uvicorn_config)
+
+
+def create_uvicorn_config(settings, app=None, host=None, port=None, reload=None):
+    """创建 uvicorn 配置，供 CLI/WebView 共用。"""
+    app_target = app if app is not None else "src.web.app:app"
+    enable_reload = settings.debug if reload is None else reload
+    return {
+        "app": app_target,
+        "host": host or settings.webui_host,
+        "port": port or settings.webui_port,
+        "reload": enable_reload,
+        "log_level": "info" if settings.debug else "warning",
+        "access_log": settings.debug,
+        "ws": "websockets",
+        # 防止注册线程繁忙时前端请求超时断开
+        "timeout_keep_alive": 120,   # Keep-Alive 连接保持 120 秒
+        "timeout_graceful_shutdown": 30,
+    }
 
 
 def main():

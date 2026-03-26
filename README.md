@@ -67,6 +67,52 @@ python webui.py
 
 进入系统设置页添加 CPA 服务，即可使用。
 
+### 4. 桌面版运行
+
+如果你想以桌面窗口方式运行，而不是手动打开浏览器：
+
+```bash
+pip install pywebview
+python desktop.py
+```
+
+桌面模式会：
+- 后台自动启动本地 FastAPI 服务
+- 使用 `pywebview` 打开内嵌窗口
+- 默认仅监听 `127.0.0.1`
+- 默认使用本地 SQLite，无需配置 `.env`
+
+## 桌面版打包
+
+### macOS 桌面版打包
+
+请在 **macOS** 上执行：
+
+```bash
+chmod +x scripts/build_macos_dmg.sh
+./scripts/build_macos_dmg.sh
+```
+
+打包完成后产物位于：
+
+- `dist/CPA Codex Manager.app`
+- `dist/CPA Codex Manager.dmg`
+
+
+### Windows 桌面版打包
+
+请在 **Windows 系统** 上执行：
+
+```bat
+scripts\build_windows.bat
+```
+
+打包完成后产物通常位于：
+
+- `dist\CPA Codex Manager\CPA Codex Manager.exe`
+
+
+
 ## 页面展示
 <img width="1064" height="511" alt="截屏2026-03-25 22 39 46" src="https://github.com/user-attachments/assets/4a019320-6a86-44d6-b465-c53e74f97ac1" />
 <img width="1795" height="877" alt="截屏2026-03-25 22 35 12" src="https://github.com/user-attachments/assets/ed34f98e-3b39-44f8-9ac5-19bce792ded4" />

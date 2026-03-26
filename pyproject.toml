@@ -8,6 +8,7 @@ dependencies = [
     "curl-cffi>=0.14.0",
     "fastapi>=0.100.0",
     "uvicorn>=0.23.0",
+    "pywebview>=5.1",
     "jinja2>=3.1.0",
     "python-multipart>=0.0.6",
     "pydantic>=2.0.0",
@@ -31,6 +32,7 @@ payment = [
 
 [project.scripts]
 CPA-Codex-Manager = "webui:main"
+CPA-Codex-Manager-Desktop = "desktop:main"
 
 [build-system]
 requires = ["hatchling"]

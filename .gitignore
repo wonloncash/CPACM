@@ -3,10 +3,21 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.so
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+.python-version
 .Python
 build/
 develop-eggs/
 dist/
+*.dmg
+*.app
+*.exe
+*.msi
+*.spec.bak
 downloads/
 eggs/
 .eggs/
@@ -52,6 +63,7 @@ token_*.json
 # OS
 .DS_Store
 Thumbs.db
+Icon?
 
 # Project specific
 backups/
