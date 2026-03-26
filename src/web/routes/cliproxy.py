@@ -1,6 +1,5 @@
 """
-Cliproxy (CPA) 账号清理工具路由
-由 CliproxyAccountCleaner 移植并针对 Web UI 优化
+Cliproxy (CPA) 账号清理工具
 """
 
 import asyncio
@@ -129,37 +128,108 @@ async def _run_bounded(items, limit, make_coro):
 
 async def perform_scan(batch_id: str, req: ScanRequest):
     """执行账号扫描流程，支持模式选择"""
+    started_at = time.perf_counter()
+    existing_status = task_manager.get_batch_status(batch_id) or {}
+    current_mode = existing_status.get("mode") or "cliproxy_scan"
+    task_manager.init_batch(batch_id, total=0)
+    task_manager.update_batch_status(batch_id, mode=current_mode, status="running", finished=False)
+
     mode_cn = {"401": "401 检测", "quota": "额度检测", "all": "全量检测"}.get(req.mode, "全量检测")
     task_manager.add_batch_log(batch_id, f"[阶段] 开始执行 CPA {mode_cn} (并发: {req.workers})")
-    
+
+    service_lookup_started = time.perf_counter()
     with get_db() as db:
         service = crud.get_cpa_service_by_id(db, req.service_id)
         if not service:
             task_manager.add_batch_log(batch_id, f"[错误] 找不到指定的 CPA 服务 ID: {req.service_id}")
             task_manager.update_batch_status(batch_id, finished=True, status="failed")
             return
+    service_lookup_cost = time.perf_counter() - service_lookup_started
+    task_manager.add_batch_log(batch_id, f"[阶段] 已加载 CPA 服务配置，耗时 {service_lookup_cost:.2f}s")
 
     base_mgmt_url = _normalize_mgmt_url(service.api_url)
     api_token = service.api_token
-    
-    task_manager.add_batch_log(batch_id, f"[系统] 正在从 {service.name} 获取认证文件列表...")
+
+    task_manager.add_batch_log(batch_id, f"[阶段] 正在从 {service.name} 拉取账号列表...")
+
+    all_files = []
+    list_fetch_started = time.perf_counter()
+
+    async def _fetch_all_files(session: aiohttp.ClientSession):
+        url = f"{base_mgmt_url}/auth-files"
+        async with session.get(url, headers=_get_mgmt_headers(api_token)) as resp:
+            if resp.status != 200:
+                error_text = await resp.text()
+                raise RuntimeError(f"获取列表失败 (HTTP {resp.status}): {error_text[:200]}")
+            data = await resp.json()
+            return data.get("files", [])
+
+    async def _fetch_selected_files(session: aiohttp.ClientSession, names: List[str]):
+        task_manager.add_batch_log(batch_id, f"[阶段] 检测到仅选中 {len(names)} 个账号，尝试走快速路径...")
+        sem = asyncio.Semaphore(min(req.workers, max(1, len(names))))
+        fetched = []
+        fallback = False
+
+        async def fetch_one(name: str):
+            nonlocal fallback
+            encoded_name = urllib.parse.quote(name, safe="")
+            url = f"{base_mgmt_url}/auth-files?name={encoded_name}"
+            async with sem:
+                try:
+                    async with session.get(url, headers=_get_mgmt_headers(api_token)) as resp:
+                        if resp.status != 200:
+                            fallback = True
+                            error_text = await resp.text()
+                            logger.warning(f"CPA 快速路径获取账号失败 {name}: HTTP {resp.status} {error_text[:200]}")
+                            return []
+                        data = await resp.json()
+                        files = data.get("files")
+                        if isinstance(files, list):
+                            return files
+                        if isinstance(data, dict):
+                            if any(k in data for k in ("name", "auth_index", "type")):
+                                return [data]
+                            item = data.get("file")
+                            if isinstance(item, dict):
+                                return [item]
+                        return []
+                except Exception as e:
+                    fallback = True
+                    logger.warning(f"CPA 快速路径获取账号异常 {name}: {e}")
+                    return []
+
+        for chunk in await asyncio.gather(*(fetch_one(name) for name in names), return_exceptions=False):
+            fetched.extend(chunk)
+
+        if fallback:
+            task_manager.add_batch_log(batch_id, "[阶段] 快速路径不可用，回退为全量账号列表同步...")
+            return None
+
+        deduped = []
+        seen = set()
+        for item in fetched:
+            key = item.get("name") or item.get("auth_index") or item.get("email")
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(item)
+
+        task_manager.add_batch_log(batch_id, f"[阶段] 快速路径命中完成，返回 {len(deduped)} 条账号记录")
+        return deduped
     
     try:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=req.timeout)) as session:
-            # 1. 获取 auth-files
-            url = f"{base_mgmt_url}/auth-files"
-            async with session.get(url, headers=_get_mgmt_headers(api_token)) as resp:
-                if resp.status != 200:
-                    error_text = await resp.text()
-                    task_manager.add_batch_log(batch_id, f"[错误] 获取列表失败 (HTTP {resp.status}): {error_text[:200]}")
-                    task_manager.update_batch_status(batch_id, finished=True, status="failed")
-                    return
-                data = await resp.json()
-                all_files = data.get("files", [])
+            if req.names:
+                all_files = await _fetch_selected_files(session, req.names)
+            if all_files is None or not req.names:
+                all_files = await _fetch_all_files(session)
     except Exception as e:
         task_manager.add_batch_log(batch_id, f"[错误] 网络连接异常: {str(e)}")
         task_manager.update_batch_status(batch_id, finished=True, status="failed")
         return
+
+    list_fetch_cost = time.perf_counter() - list_fetch_started
+    task_manager.add_batch_log(batch_id, f"[阶段] 账号列表拉取完成，共 {len(all_files)} 条，耗时 {list_fetch_cost:.2f}s")
 
     if not all_files:
         task_manager.init_batch(batch_id, total=0)
@@ -168,6 +238,8 @@ async def perform_scan(batch_id: str, req: ScanRequest):
         return
 
     # 过滤候选
+    filter_started = time.perf_counter()
+    task_manager.add_batch_log(batch_id, "[阶段] 正在过滤可检测账号...")
     candidates = []
     for f in all_files:
         if f.get("type") != req.target_type: continue
@@ -181,12 +253,16 @@ async def perform_scan(batch_id: str, req: ScanRequest):
         candidates.append(f)
 
     total = len(candidates)
+    filter_cost = time.perf_counter() - filter_started
+    prepare_cost = time.perf_counter() - started_at
     
     # 核心：在这里才正式初始化，确保 total 正确
     task_manager.init_batch(batch_id, total=total)
-    
+
+    task_manager.add_batch_log(batch_id, f"[阶段] 候选账号过滤完成，耗时 {filter_cost:.2f}s")
+    task_manager.add_batch_log(batch_id, f"[阶段] 已准备完成，开始并发检测... (准备阶段总耗时 {prepare_cost:.2f}s)")
     task_manager.add_batch_log(batch_id, f"[信息] 识别到 {total} 个待检测候选账号" + (f" (已过滤，目标选中的 {len(req.names)} 个)" if req.names else ""))
-    
+
     if total == 0:
         task_manager.add_batch_log(batch_id, "[完成] 没有符合条件的账号需要检测")
         task_manager.update_batch_status(batch_id, finished=True, status="completed")
@@ -301,6 +377,8 @@ async def perform_scan(batch_id: str, req: ScanRequest):
             "errors": errors
         }
     )
+    total_cost = time.perf_counter() - started_at
+    task_manager.add_batch_log(batch_id, f"[耗时] 全部扫描总耗时 {total_cost:.2f}s")
     task_manager.add_batch_log(batch_id, f"[完成] 扫描结束。有效: {total - invalid_401 - invalid_quota - errors}, 401: {invalid_401}, 额度耗尽: {invalid_quota}, 异常: {errors}")
 
 async def perform_action(batch_id: str, req: ActionRequest):
@@ -368,6 +446,7 @@ class AutoPatrolManager:
     def __init__(self):
         self._config: Optional[AutoPatrolConfig] = None
         self._task: Optional[asyncio.Task] = None
+        self._startup_task: Optional[asyncio.Task] = None
         self._last_run: Optional[datetime] = None
         self._status: str = "stopped" # stopped, running, idle
         self._history: List[Dict[str, Any]] = [] # 存储最近 50 条记录
@@ -384,17 +463,31 @@ class AutoPatrolManager:
                 if "config" in data:
                     self._config = AutoPatrolConfig(**data["config"])
                 self._history = data.get("history", [])
-                
-                # 如果配置为开启，则自动启动
-                if self._config and self._config.enabled:
-                    # 延迟启动，避免启动时并发过高
-                    asyncio.create_task(self._delayed_start())
         except Exception as e:
             logger.error(f"加载巡检配置失败: {e}")
 
     async def _delayed_start(self):
         await asyncio.sleep(5)
         self.start()
+
+    async def _delayed_start_if_needed(self):
+        """在事件循环就绪后按需延迟启动自动巡检。"""
+        if not self._config or not self._config.enabled:
+            logger.info("自动巡检未启用，跳过启动")
+            return
+        if self._task and not self._task.done():
+            logger.info("自动巡检已在运行，跳过重复启动")
+            return
+        if self._startup_task and not self._startup_task.done():
+            logger.info("自动巡检启动任务已存在，跳过重复调度")
+            return
+
+        self._startup_task = asyncio.current_task()
+        try:
+            logger.info("应用已就绪，5 秒后尝试启动自动巡检")
+            await self._delayed_start()
+        finally:
+            self._startup_task = None
 
     def _save(self):
         """保存持久化配置"""
@@ -437,6 +530,9 @@ class AutoPatrolManager:
         logger.info("自动巡检已启动")
 
     def stop(self):
+        if self._startup_task and not self._startup_task.done():
+            self._startup_task.cancel()
+            self._startup_task = None
         if self._task:
             self._task.cancel()
             self._task = None
@@ -455,6 +551,11 @@ class AutoPatrolManager:
                 
                 # 执行一次扫描
                 batch_id = f"auto_patrol_{int(time.time())}"
+                task_manager.init_batch(batch_id, total=0, description="自动巡检")
+                task_manager.update_batch_status(batch_id, mode="auto_patrol", status="running", finished=False)
+                task_manager.add_batch_log(batch_id, f"[自动巡检] 开始新一轮巡检，batch_id={batch_id}")
+                logger.info(f"自动巡检开始首轮扫描: batch_id={batch_id}, service_id={self._config.service_id}")
+
                 scan_req = ScanRequest(
                     service_id=self._config.service_id,
                     mode=self._config.mode,
@@ -470,6 +571,15 @@ class AutoPatrolManager:
                 
                 # 获取结果并执行动作
                 status = task_manager.get_batch_status(batch_id)
+                if not status:
+                    logger.error(f"自动巡检扫描结束后未找到批次状态: {batch_id}")
+                    self._status = "error"
+                    await asyncio.sleep(60)
+                    continue
+
+                if status.get("status") != "completed":
+                    logger.warning(f"自动巡检扫描未成功完成: batch_id={batch_id}, status={status.get('status')}")
+
                 if status and status.get("status") == "completed":
                     results = status.get("results", [])
                     names_401 = [r["name"] for r in results if r["status"] == "401"]

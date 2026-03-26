@@ -14,6 +14,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentFilter = 'all';
     let searchQuery = '';
     let currentActionNames = []; // 存储正在执行批量动作的账号名
+    let latestPreparationMessage = '正在从 CPA 拉取账号列表...';
 
     // ---------------- DOM 元素 ----------------
     const scanForm = document.getElementById('scan-form');
@@ -537,14 +538,42 @@ document.addEventListener('DOMContentLoaded', () => {
         line.innerHTML = `<span class="log-time">${new Date().toLocaleTimeString()}</span> <span class="log-content">${message}</span>`;
         consoleLog.appendChild(line);
         consoleLog.scrollTop = consoleLog.scrollHeight;
+
+        syncPreparationStatusFromLog(message);
     }
 
     function clearLogs() { consoleLog.innerHTML = ''; }
 
+    function syncPreparationStatusFromLog(message) {
+        if (!message) return;
+
+        if (message.includes('拉取账号列表') || message.includes('获取认证文件列表') || message.includes('快速路径不可用')) {
+            latestPreparationMessage = '正在从 CPA 拉取账号列表...';
+        } else if (message.includes('过滤可检测账号') || message.includes('识别到')) {
+            latestPreparationMessage = '正在过滤可检测账号...';
+        } else if (message.includes('已准备完成，开始并发检测')) {
+            latestPreparationMessage = '已准备完成，开始并发检测...';
+        }
+
+        const currentText = progressStatus.textContent || '';
+        if (currentText.includes('准备') || currentText.includes('同步') || currentText.includes('过滤')) {
+            progressStatus.textContent = latestPreparationMessage;
+        }
+
+        const bgProgress = document.getElementById('background-task-progress');
+        if (bgProgress) {
+            const bgCurrent = bgProgress.textContent || '';
+            if (bgCurrent.includes('同步') || bgCurrent.includes('准备') || bgCurrent.includes('过滤')) {
+                bgProgress.textContent = latestPreparationMessage;
+            }
+        }
+    }
+
     function showProgressModal(title) {
         progressTitle.textContent = title;
         progressBar.style.width = '0%';
-        progressStatus.textContent = '准备下发任务...';
+        latestPreparationMessage = '正在从 CPA 拉取账号列表...';
+        progressStatus.textContent = latestPreparationMessage;
         progressModal.classList.add('active');
     }
 
@@ -559,7 +588,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 // 更新模态框进度
                 progressBar.style.width = `${percent}%`;
-                progressStatus.textContent = total > 0 ? `任务进度: ${completed} / ${total}` : '正在准备任务队列...';
+                progressStatus.textContent = total > 0 ? `任务进度: ${completed} / ${total}` : latestPreparationMessage;
 
                 // 更新后台任务栏进度 (如果有)
                 const bgTitle = document.getElementById('background-task-title');
@@ -568,7 +597,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const bgState = document.getElementById('background-task-state');
 
                 if (bgTitle) bgTitle.textContent = progressTitle.textContent;
-                if (bgProgress) bgProgress.textContent = total > 0 ? `任务进度: ${completed} / ${total}` : '正在同步列表...';
+                if (bgProgress) bgProgress.textContent = total > 0 ? `任务进度: ${completed} / ${total}` : latestPreparationMessage;
                 if (bgBar) bgBar.style.width = `${percent}%`;
                 if (bgState) {
                     bgState.textContent = status.finished ? '已结束' : '进行中';
